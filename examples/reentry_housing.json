@@ -1,0 +1,47 @@
+{
+  "name": "KINGDUM Living Ministry, Inc.",
+  "mission": "Providing comprehensive transitional housing, reentry support, vocational training, and wraparound services for justice-involved adults and their families in the Raleigh-Durham region of North Carolina.",
+  "focus_areas": [
+    "reentry",
+    "transitional housing",
+    "workforce development",
+    "family services",
+    "substance use recovery",
+    "mental health"
+  ],
+  "populations": [
+    "justice-involved individuals",
+    "formerly incarcerated adults",
+    "low-income families",
+    "children and youth at-risk"
+  ],
+  "location_state": "NC",
+  "location_city": "Raleigh",
+  "org_type": "Nonprofit",
+  "tax_status": "501(c)(3)",
+  "annual_budget": 850000,
+  "staff_count": 12,
+  "years_operating": 2,
+  "programs": [
+    "transitional housing",
+    "case management",
+    "vocational training",
+    "re-entry coordination",
+    "family and youth services",
+    "counseling and mental health",
+    "mobile ministry outreach",
+    "donor relations"
+  ],
+  "keywords_extra": [
+    "HIPAA",
+    "PHI",
+    "faith-based",
+    "501c3",
+    "North Carolina",
+    "Second Chance Act",
+    "wraparound services",
+    "criminal justice"
+  ],
+  "funding_min": 100000,
+  "funding_max": 1000000
+}
