@@ -1,0 +1,43 @@
+{
+  "name": "Community Youth Forward",
+  "mission": "Empowering underserved youth through mentorship, academic support, life skills training, and career readiness programs that close opportunity gaps in under-resourced communities.",
+  "focus_areas": [
+    "youth development",
+    "education",
+    "mentorship",
+    "career readiness",
+    "afterschool programs",
+    "family strengthening"
+  ],
+  "populations": [
+    "youth ages 12-24",
+    "at-risk youth",
+    "low-income families",
+    "first-generation students"
+  ],
+  "location_state": "NC",
+  "location_city": "Durham",
+  "org_type": "Nonprofit",
+  "tax_status": "501(c)(3)",
+  "annual_budget": 600000,
+  "staff_count": 8,
+  "years_operating": 5,
+  "programs": [
+    "afterschool tutoring",
+    "summer enrichment",
+    "workforce readiness",
+    "mentorship matching",
+    "arts and culture",
+    "sports and recreation",
+    "family engagement"
+  ],
+  "keywords_extra": [
+    "STEM",
+    "college access",
+    "21st Century Learning",
+    "Title I",
+    "community schools"
+  ],
+  "funding_min": 50000,
+  "funding_max": 500000
+}

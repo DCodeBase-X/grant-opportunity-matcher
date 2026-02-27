@@ -1,0 +1,44 @@
+{
+  "name": "Pathways Workforce Institute",
+  "mission": "Delivering industry-aligned vocational training, job placement support, and career coaching to adults with barriers to employment — including formerly incarcerated individuals, veterans, and long-term unemployed workers.",
+  "focus_areas": [
+    "workforce development",
+    "vocational training",
+    "job placement",
+    "adult education",
+    "economic mobility"
+  ],
+  "populations": [
+    "adults with barriers to employment",
+    "formerly incarcerated individuals",
+    "veterans",
+    "long-term unemployed",
+    "low-income adults"
+  ],
+  "location_state": "NC",
+  "location_city": "Greensboro",
+  "org_type": "Nonprofit",
+  "tax_status": "501(c)(3)",
+  "annual_budget": 1200000,
+  "staff_count": 18,
+  "years_operating": 7,
+  "programs": [
+    "construction trades training",
+    "healthcare workforce prep",
+    "IT and tech skills bootcamp",
+    "job readiness coaching",
+    "employer partnership program",
+    "wraparound support services"
+  ],
+  "keywords_extra": [
+    "WIOA",
+    "Workforce Innovation and Opportunity Act",
+    "sector-based training",
+    "industry credentials",
+    "employer partnerships",
+    "apprenticeship",
+    "stackable credentials"
+  ],
+  "funding_min": 150000,
+  "funding_max": 2000000
+}
