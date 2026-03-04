@@ -7,23 +7,49 @@ Stage 1 — Keyword scoring (always runs, no API key needed)
     TF-IDF-style weighted overlap between the nonprofit profile
     keywords and each grant's title + description.
 
-Stage 2 — AI scoring (optional, requires ANTHROPIC_API_KEY)
-    Uses Claude to produce a nuanced relevance score and a
-    human-readable rationale for each match.
+Stage 2 — AI scoring (optional, requires an AI provider API key)
+    Uses a configurable AI provider to produce a nuanced relevance
+    score and a human-readable rationale for each match.
 
-Final score = 0.6 × keyword_score + 0.4 × ai_score (if available)
+    Supported providers (auto-detected from env, or forced via AI_PROVIDER):
+        ANTHROPIC_API_KEY  → Anthropic Claude  (default)
+        OPENAI_API_KEY     → OpenAI
+        GROQ_API_KEY       → Groq  (OpenAI-compatible)
+        OLLAMA_BASE_URL    → Ollama (local, no key needed)
+
+    Optional overrides:
+        AI_PROVIDER     → "anthropic" | "openai" | "groq" | "ollama"
+        AI_MODEL        → override the pinned default model
+        OPENAI_BASE_URL → custom base URL for any OpenAI-compatible endpoint
+
+Final score = 0.6 × keyword_score + 0.4 × ai_score  (if AI available)
               or simply keyword_score if AI scoring is skipped.
+
+Security notes
+--------------
+- All external string fields are sanitized before prompt interpolation
+  to defend against prompt-injection attacks embedded in grant data.
+- Model output is parsed with anchored regex, HTML-escaped, and length-capped
+  before it reaches any caller / UI layer.
+- API key material is stripped from exception messages before they are returned.
+- base_url values are validated for scheme and SSRF-risky private IP ranges.
+- AI_PROVIDER env value is validated against a strict whitelist before use.
 """
 
-import os
+import html
+import ipaddress
 import math
+import os
 import re
-from typing import Optional
+from typing import Callable
+from urllib.parse import urlparse
 
 from .grants_api import GrantOpportunity
-from .profile    import NonprofitProfile, profile_summary
+from .profile import NonprofitProfile, profile_summary
 
-# ── Keyword scoring ───────────────────────────────────────────────────────────
+
+
+# [ 1 KEYWORD SCORING ]
 
 # Stopwords to exclude from keyword matching
 _STOPWORDS = {
@@ -108,81 +134,306 @@ def keyword_score(grant: GrantOpportunity, profile: NonprofitProfile) -> float:
     return round(min(1.0, score / (score + 2.0) * 2.5), 4)
 
 
-# ── AI scoring (Claude) ───────────────────────────────────────────────────────
+#  [ 2 SECURITY HELPERS ]
+
+
+# Lines in external data that could hijack prompt instructions
+_INJECTION_RE = re.compile(
+    r"^\s*(SCORE\s*:|RATIONALE\s*:|IGNORE\s|SYSTEM\s*:|<\s*system"
+    r"|assistant\s*:|user\s*:|human\s*:|forget\s+previous"
+    r"|disregard\s+previous|new\s+instruction)",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+def _sanitize_field(value: str, max_len: int = 500) -> str:
+    """
+    Strip prompt-injection attempts from any external string before embedding
+    it in a prompt.  Removes lines that try to hijack the output format or
+    issue meta-instructions, then truncates to max_len.
+    """
+    sanitized = _INJECTION_RE.sub("[REDACTED]", value)
+    # Collapse runs of blank lines that could hide injected blocks
+    sanitized = re.sub(r"\n{3,}", "\n\n", sanitized)
+    return sanitized[:max_len]
+
+
+def _sanitize_rationale(text: str, max_len: int = 400) -> str:
+    """
+    HTML-escape model output and strip embedded URLs before the string
+    reaches any UI layer (prevents XSS and exfiltration links).
+    """
+    safe = html.escape(text)
+    safe = re.sub(r"https?://\S+", "[URL]", safe)
+    return safe[:max_len]
+
+
+def _sanitize_error(exc: Exception) -> str:
+    """
+    HTTP-client exceptions often embed Authorization headers or full request
+    URLs (including API keys) in their message.  Redact before returning.
+    """
+    msg = str(exc)
+    # Bearer tokens / Anthropic / Groq key prefixes
+    msg = re.sub(
+        r"(Bearer\s+|sk-|sk-ant-|gsk_)[A-Za-z0-9\-_]{8,}",
+        "[REDACTED]",
+        msg,
+    )
+    msg = re.sub(r"api[_-]?key[=:]\s*\S+", "api_key=[REDACTED]", msg, flags=re.IGNORECASE)
+    return msg[:300]
+
+
+_PRIVATE_NETS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("::1/128"),
+]
+
+def _validate_base_url(url: str | None) -> str | None:
+    """
+    Guard against SSRF: reject private/loopback IPs and non-http(s) schemes.
+    Plain http is only allowed for localhost (Ollama default).
+    """
+    if not url:
+        return None
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"base_url must use http or https, got: {parsed.scheme!r}")
+    host = parsed.hostname or ""
+    if parsed.scheme == "http" and host not in ("localhost", "127.0.0.1", "::1"):
+        raise ValueError("http base_url is only permitted for localhost endpoints")
+    try:
+        addr = ipaddress.ip_address(host)
+        for net in _PRIVATE_NETS:
+            if addr in net and host not in ("localhost", "127.0.0.1", "::1"):
+                raise ValueError(f"base_url targets private network: {net}")
+    except ValueError as exc:
+        if "private network" in str(exc):
+            raise
+        # host is a domain name — ip_address() raised, that's fine
+    return url
+
+
+
+# [ 3 PROMPT CONSTRUCTION ]
+
+
+def _build_prompt(grant: GrantOpportunity, profile: NonprofitProfile) -> str:
+    """
+    Build the scoring prompt.
+
+    All external-sourced fields are sanitized before interpolation.
+    Data is wrapped in XML delimiters so the model cannot confuse
+    grant content with instructions.
+    """
+    return f"""You are a nonprofit grant specialist. Score how well the grant below matches the nonprofit profile.
+
+<nonprofit_profile>
+{_sanitize_field(profile_summary(profile), max_len=1500)}
+</nonprofit_profile>
+
+<grant_opportunity>
+  <title>{_sanitize_field(grant.title, max_len=200)}</title>
+  <agency>{_sanitize_field(grant.agency, max_len=200)}</agency>
+  <award_range>{grant.award_floor_fmt} – {grant.award_ceiling_fmt}</award_range>
+  <deadline>{grant.deadline_display}</deadline>
+  <categories>{_sanitize_field(", ".join(grant.categories) or "Not specified", max_len=300)}</categories>
+  <eligible_applicants>{_sanitize_field(", ".join(grant.eligible_types) or "Not specified", max_len=300)}</eligible_applicants>
+  <description>
+{_sanitize_field(grant.description, max_len=1200)}
+  </description>
+</grant_opportunity>
+
+Respond with ONLY the following two lines — no preamble, no extra text:
+SCORE: [integer 0-10]
+RATIONALE: [2-3 sentences on match quality, alignment points, and eligibility concerns]"""
+
+
+
+# [ 4 RESPONSE PARSING ]
+
+# Anchored regex — not startswith() — so an injected early SCORE: line cannot win
+_SCORE_RE     = re.compile(r"^SCORE:\s*([0-9]+(?:\.[0-9]+)?)\s*$", re.MULTILINE)
+_RATIONALE_RE = re.compile(r"^RATIONALE:\s*(.+)$", re.MULTILINE)
+
+
+def _parse_response(response_text: str) -> tuple[float, str]:
+    score_match     = _SCORE_RE.search(response_text)
+    rationale_match = _RATIONALE_RE.search(response_text)
+
+    if not score_match:
+        raise ValueError("Model response missing a valid SCORE line")
+
+    try:
+        raw_score = float(score_match.group(1))
+    except ValueError:
+        raise ValueError(f"Non-numeric score value: {score_match.group(1)!r}")
+
+    if not (0.0 <= raw_score <= 10.0):
+        raise ValueError(f"Score out of expected range [0, 10]: {raw_score}")
+
+    normalized = round(raw_score / 10.0, 4)
+    rationale  = (
+        _sanitize_rationale(rationale_match.group(1))
+        if rationale_match
+        else "No rationale provided."
+    )
+    return normalized, rationale
+
+
+
+#  [ 5 PROVIDER BACKENDS ]
+# -- ANTHROPIC -- OPENAI --
+
+def _score_anthropic(
+    prompt: str, api_key: str, model: str, base_url: str | None
+) -> tuple[float, str]:
+    import anthropic  # lazy — only needed when AI scoring is active
+    client = anthropic.Anthropic(api_key=api_key)
+    message = client.messages.create(
+        model=model,
+        max_tokens=200,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return _parse_response(message.content[0].text)
+
+
+def _score_openai(
+    prompt: str, api_key: str, model: str, base_url: str | None
+) -> tuple[float, str]:
+    from openai import OpenAI  # lazy — only needed when AI scoring is active
+    kwargs: dict = {"api_key": api_key}
+    if base_url:
+        kwargs["base_url"] = base_url
+    client = OpenAI(**kwargs)
+    response = client.chat.completions.create(
+        model=model,
+        max_tokens=200,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return _parse_response(response.choices[0].message.content)
+
+
+# Registry: provider_name → (scorer_fn, install_package, pinned_default_model)
+# Models are pinned to specific versions so provider alias updates cannot
+# silently change behaviour and break output-format parsing.
+_PROVIDERS: dict[str, tuple[Callable, str, str]] = {
+    "anthropic": (_score_anthropic, "anthropic", "claude-haiku-4-5-20251001"),
+    "openai":    (_score_openai,    "openai",    "gpt-4o-mini-2024-07-18"),
+    "groq":      (_score_openai,    "openai",    "llama3-8b-8192"),
+    "ollama":    (_score_openai,    "openai",    "llama3.2"),
+}
+
+_VALID_PROVIDERS = frozenset(_PROVIDERS)
+
+
+# [ 6  AI SCORING MODEL PUBLIC ENTRY POINT ]
+
 
 def ai_score(
     grant: GrantOpportunity,
     profile: NonprofitProfile,
 ) -> tuple[float, str]:
     """
-    Use Claude to score grant relevance and produce a rationale.
+    Score grant relevance using whichever AI provider is configured.
+
+    Provider auto-detection order (first key found wins):
+        ANTHROPIC_API_KEY  → Anthropic Claude
+        OPENAI_API_KEY     → OpenAI
+        GROQ_API_KEY       → Groq  (OpenAI-compatible)
+        OLLAMA_BASE_URL    → Ollama (local, no key needed)
 
     Returns:
         (score_0_to_1, rationale_string)
-        Returns (0.0, "AI scoring unavailable") if no API key is set.
+        Returns (0.0, "<message>") if no provider is configured or an
+        error occurs.  The error message is sanitized — no key material.
     """
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        return 0.0, "Set ANTHROPIC_API_KEY in .env to enable AI scoring."
+
+    # Validate AI_PROVIDER before using or echoing it anywhere 
+    raw_provider_env = os.getenv("AI_PROVIDER", "").lower().strip()
+    if raw_provider_env and raw_provider_env not in _VALID_PROVIDERS:
+        return 0.0, (
+            f"Invalid AI_PROVIDER value. "
+            f"Choose from: {', '.join(sorted(_VALID_PROVIDERS))}"
+        )
+
+    def _resolve() -> tuple[str, str, str | None] | None:
+        """Return (provider, api_key, base_url) or None if unconfigured."""
+        raw_base_url = os.getenv("OPENAI_BASE_URL")
+
+        if raw_provider_env:
+            key_env: str | None = {
+                "anthropic": "ANTHROPIC_API_KEY",
+                "openai":    "OPENAI_API_KEY",
+                "groq":      "GROQ_API_KEY",
+                "ollama":    None,
+            }[raw_provider_env]
+
+            api_key = os.getenv(key_env) if key_env else None
+            if key_env and not api_key:
+                return None  # provider forced but required key is missing
+
+            provider_urls: dict[str, str] = {
+                "groq":   "https://api.groq.com/openai/v1",
+                "ollama": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+            }
+            url = provider_urls.get(raw_provider_env, raw_base_url)
+            return raw_provider_env, api_key or "none", url
+
+        # Auto-detect — first key found wins
+        if key := os.getenv("ANTHROPIC_API_KEY"):
+            return "anthropic", key, None
+        if key := os.getenv("OPENAI_API_KEY"):
+            return "openai", key, raw_base_url
+        if key := os.getenv("GROQ_API_KEY"):
+            return "groq", key, "https://api.groq.com/openai/v1"
+        if url := os.getenv("OLLAMA_BASE_URL"):
+            return "ollama", "none", url
+        return None
+
+    resolved = _resolve()
+    if not resolved:
+        return 0.0, (
+            "No AI provider configured. "
+            "Set one of: ANTHROPIC_API_KEY, OPENAI_API_KEY, "
+            "GROQ_API_KEY, or OLLAMA_BASE_URL in your .env"
+        )
+
+    provider, api_key, base_url = resolved
+    scorer_fn, package, default_model = _PROVIDERS[provider]
+    model = os.getenv("AI_MODEL", "").strip() or default_model
+
+    # SSRF guard on base_url
+    try:
+        safe_url = _validate_base_url(base_url)
+    except ValueError as exc:
+        return 0.0, f"Invalid base URL configuration: {exc}"
+
+    prompt = _build_prompt(grant, profile)
 
     try:
-        import anthropic  # lazy import — only needed for AI scoring
-
-        client = anthropic.Anthropic(api_key=api_key)
-
-        prompt = f"""You are a nonprofit grant specialist. Score how well the following grant opportunity matches this nonprofit organization's profile.
-
-NONPROFIT PROFILE:
-{profile_summary(profile)}
-
-GRANT OPPORTUNITY:
-Title: {grant.title}
-Agency: {grant.agency}
-Award Range: {grant.award_floor_fmt} – {grant.award_ceiling_fmt}
-Deadline: {grant.deadline_display}
-Categories: {', '.join(grant.categories) or 'Not specified'}
-Eligible Applicants: {', '.join(grant.eligible_types) or 'Not specified'}
-Description:
-{grant.description[:1200]}
-
-Respond with ONLY the following format — no extra text:
-SCORE: [number from 0 to 10]
-RATIONALE: [2-3 sentences explaining the match quality, including the strongest alignment points and any eligibility concerns]"""
-
-        message = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=200,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        response_text = message.content[0].text.strip()
-
-        # Parse score
-        score_line = next(
-            (l for l in response_text.splitlines() if l.startswith("SCORE:")), ""
-        )
-        rationale_line = next(
-            (l for l in response_text.splitlines() if l.startswith("RATIONALE:")), ""
-        )
-
-        raw_score  = float(score_line.replace("SCORE:", "").strip())
-        normalized = round(min(1.0, max(0.0, raw_score / 10.0)), 4)
-        rationale  = rationale_line.replace("RATIONALE:", "").strip()
-
-        return normalized, rationale
-
+        return scorer_fn(prompt, api_key, model, safe_url)
     except ImportError:
-        return 0.0, "Install 'anthropic' package to enable AI scoring."
-    except Exception as e:
-        return 0.0, f"AI scoring error: {e}"
+        return 0.0, f"Install '{package}' package to use the {provider} provider."
+    except ValueError as exc:
+        # Safe parse errors — no key material
+        return 0.0, f"AI response parsing error: {exc}"
+    except Exception as exc:
+        # Sanitize before returning — HTTP exceptions can embed API keys
+        return 0.0, f"AI scoring error ({provider}): {_sanitize_error(exc)}"
 
 
-# ── Main matching pipeline ────────────────────────────────────────────────────
+# [ 7  MAIN MATCHING PIPELINE ]
+
 
 def score_grants(
-    grants:       list[GrantOpportunity],
-    profile:      NonprofitProfile,
-    use_ai:       bool = False,
-    min_score:    float = 0.10,
+    grants:    list[GrantOpportunity],
+    profile:   NonprofitProfile,
+    use_ai:    bool = False,
+    min_score: float = 0.10,
 ) -> list[GrantOpportunity]:
     """
     Score and rank a list of grants against a nonprofit profile.
@@ -190,7 +441,7 @@ def score_grants(
     Args:
         grants:    Grant opportunities from grants_api.search_grants().
         profile:   The nonprofit's profile.
-        use_ai:    Whether to run Claude-powered AI scoring (requires API key).
+        use_ai:    Whether to run AI scoring (requires a configured provider).
         min_score: Drop grants below this combined score threshold.
 
     Returns:
@@ -202,13 +453,12 @@ def score_grants(
     for grant in grants:
         kw_score = keyword_score(grant, profile)
 
-        breakdown = {"keyword_score": kw_score}
+        breakdown: dict = {"keyword_score": kw_score}
         ai_weight = 0.0
-        rationale = ""
 
         if use_ai:
             ai_val, rationale = ai_score(grant, profile)
-            breakdown["ai_score"] = ai_val
+            breakdown["ai_score"]     = ai_val
             breakdown["ai_rationale"] = rationale
             ai_weight = ai_val
 
