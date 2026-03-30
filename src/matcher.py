@@ -138,13 +138,15 @@ def keyword_score(
         if re.search(r"\b" + re.escape(area.lower()) + r"\b", grant_cats_lower):
             score += 0.3
 
+    # Normalize keyword score to [0, 0.95], reserving headroom for eligibility bonus
+    normalized = min(0.95, score / (score + 2.0) * 2.5)
+
     # Eligibility bonus — does the grant accept nonprofits?
     elig_text = " ".join(grant.eligible_types).lower()
     if any(w in elig_text for w in ["nonprofit", "non-profit", "faith", "community"]):
-        score += 0.2
+        normalized += 0.05
 
-    # Normalize to [0, 1] using a logistic-like squash
-    return round(min(1.0, score / (score + 2.0) * 2.5), 4)
+    return round(min(1.0, normalized), 4)
 
 
 #  [ 2 SECURITY HELPERS ]

@@ -1,6 +1,6 @@
 """
 grants_api.py
-=============
+
 Client for the Grants.gov public search API.
 No API key required — fully open access.
 
