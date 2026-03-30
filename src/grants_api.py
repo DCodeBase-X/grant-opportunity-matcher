@@ -141,7 +141,11 @@ def search_grants(
                     "Try again later or reduce max_results."
                 )
         except requests.exceptions.HTTPError as e:
-            raise RuntimeError(f"Grants.gov API error: {e}")
+            status_code = e.response.status_code if e.response is not None else None
+            if status_code in (429, 503) and attempt < MAX_RETRIES:
+                time.sleep(2 ** attempt)
+            else:
+                raise RuntimeError(f"Grants.gov API error: {e}")
         except Exception as e:
             raise RuntimeError(f"Unexpected error fetching grants: {e}")
 

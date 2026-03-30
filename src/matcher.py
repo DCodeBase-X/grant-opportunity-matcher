@@ -38,9 +38,9 @@ Security notes
 
 import html
 import ipaddress
-import math
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 from urllib.parse import urlparse
 
@@ -87,20 +87,30 @@ def _term_freq(tokens: list[str]) -> dict[str, float]:
     return {t: c / total for t, c in counts.items()}
 
 
-def keyword_score(grant: GrantOpportunity, profile: NonprofitProfile) -> float:
-    """
-    Compute a keyword relevance score in [0, 1].
-
-    Combines title matching (weighted 2×) with description matching,
-    boosting priority domain terms.
-    """
-    profile_tokens = set(_tokenize(
+def _get_profile_tokens(profile: NonprofitProfile) -> set[str]:
+    """Pre-compute profile tokens once so they aren't rebuilt for every grant."""
+    return set(_tokenize(
         profile.mission
         + " " + " ".join(profile.focus_areas)
         + " " + " ".join(profile.populations)
         + " " + " ".join(profile.programs)
         + " " + " ".join(profile.keywords_extra)
     ))
+
+
+def keyword_score(
+    grant: GrantOpportunity,
+    profile: NonprofitProfile,
+    profile_tokens: set[str] | None = None,
+) -> float:
+    """
+    Compute a keyword relevance score in [0, 1].
+
+    Combines title matching (weighted 2×) with description matching,
+    boosting priority domain terms.
+    """
+    if profile_tokens is None:
+        profile_tokens = _get_profile_tokens(profile)
 
     # Grant text: title is more signal-dense, weight it higher
     title_tokens = _tokenize(grant.title)
@@ -122,7 +132,7 @@ def keyword_score(grant: GrantOpportunity, profile: NonprofitProfile) -> float:
     # Category bonus
     grant_cats_lower = " ".join(grant.categories).lower()
     for area in profile.focus_areas:
-        if area.lower() in grant_cats_lower:
+        if re.search(r"\b" + re.escape(area.lower()) + r"\b", grant_cats_lower):
             score += 0.3
 
     # Eligibility bonus — does the grant accept nonprofits?
@@ -448,32 +458,35 @@ def score_grants(
         Sorted list of GrantOpportunity objects, highest score first,
         with .relevance_score and .score_breakdown populated.
     """
-    results = []
+    profile_tokens = _get_profile_tokens(profile)
 
-    for grant in grants:
-        kw_score = keyword_score(grant, profile)
-
+    def _score_one(grant: GrantOpportunity) -> GrantOpportunity:
+        kw_score = keyword_score(grant, profile, profile_tokens)
         breakdown: dict = {"keyword_score": kw_score}
-        ai_weight = 0.0
 
         if use_ai:
             ai_val, rationale = ai_score(grant, profile)
             breakdown["ai_score"]     = ai_val
             breakdown["ai_rationale"] = rationale
-            ai_weight = ai_val
 
-        # Combined weighted score
-        if use_ai and breakdown.get("ai_score", 0) > 0:
-            combined = round(0.60 * kw_score + 0.40 * ai_weight, 4)
+        # Blend scores — include AI weight even when ai_score == 0.0 (genuine poor match)
+        if use_ai and "ai_score" in breakdown:
+            combined = round(0.60 * kw_score + 0.40 * breakdown["ai_score"], 4)
         else:
             combined = kw_score
 
         breakdown["combined_score"] = combined
         grant.relevance_score = combined
         grant.score_breakdown  = breakdown
+        return grant
 
-        if combined >= min_score:
-            results.append(grant)
+    # Parallelize AI scoring (each call is a separate network request)
+    if use_ai and len(grants) > 1:
+        with ThreadPoolExecutor(max_workers=min(5, len(grants))) as pool:
+            all_grants = list(pool.map(_score_one, grants))
+    else:
+        all_grants = [_score_one(g) for g in grants]
 
+    results = [g for g in all_grants if g.relevance_score >= min_score]
     results.sort(key=lambda g: g.relevance_score, reverse=True)
     return results

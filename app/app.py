@@ -8,6 +8,7 @@ Run:
 """
 
 import os
+import re
 import sys
 import json
 from pathlib import Path
@@ -22,7 +23,23 @@ from src.profile    import NonprofitProfile, profile_from_dict, load_profile
 from src.matcher    import score_grants
 from src.exporter   import to_csv_bytes, to_markdown_report
 
-# ── Page config ───────────────────────────────────────────────────────────────
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_search(
+    keywords: str,
+    max_results: int,
+    status: str,
+    funding_min,
+    funding_max,
+) -> list:
+    return search_grants(
+        keywords=keywords,
+        max_results=max_results,
+        status=status,
+        funding_min=funding_min,
+        funding_max=funding_max,
+    )
+
+#  Page config
 st.set_page_config(
     page_title="Grant Opportunity Matcher",
     page_icon= "app/assets/all_matches.png", 
@@ -57,16 +74,16 @@ with st.sidebar:
         profile_data = {
             "name":           st.text_input("Organization name", "My Nonprofit"),
             "mission":        st.text_area("Mission statement",
-                                "We provide housing and reentry services for justice-involved adults.", height=80),
+                                "We provide housing and reentry services for justice-involved adults.", height=80, max_chars=500),
             "focus_areas":    st.text_input("Focus areas (comma-separated)",
-                                "reentry, housing, workforce development"),
+                                "reentry, housing, workforce development", max_chars=200),
             "populations":    st.text_input("Populations served (comma-separated)",
-                                "justice-involved individuals, low-income adults"),
+                                "justice-involved individuals, low-income adults", max_chars=200),
             "location_state": st.text_input("State (2-letter)", "NC").upper(),
             "location_city":  st.text_input("City (optional)", ""),
             "tax_status":     st.selectbox("Tax status", ["501(c)(3)", "501(c)(4)", "Government", "Other"]),
             "programs":       st.text_input("Key programs (comma-separated)",
-                                "transitional housing, job training, case management"),
+                                "transitional housing, job training, case management", max_chars=200),
             "funding_min":    st.number_input("Min award sought ($)", 0, 5_000_000, 50_000, step=10_000),
             "funding_max":    st.number_input("Max award sought ($)", 0, 10_000_000, 500_000, step=10_000),
         }
@@ -86,7 +103,7 @@ with st.sidebar:
 
     run_btn = st.button("🔍  Find Matching Grants", type="primary", use_container_width=True)
 
-# ── Main panel ────────────────────────────────────────────────────────────────
+#  Main panel 
 st.title("Grant Opportunity Matcher")
 st.markdown(
     "Matches your nonprofit's mission and focus areas to live federal grant opportunities "
@@ -102,7 +119,7 @@ if not run_btn:
     )
     st.stop()
 
-# ── Run the pipeline ──────────────────────────────────────────────────────────
+#  Run the pipeline 
 try:
     profile = profile_from_dict(profile_data)
 except ValueError as e:
@@ -114,7 +131,7 @@ with st.spinner("Searching Grants.gov…" if not use_mock else "Loading demo gra
         raw_grants = MOCK_GRANTS
     else:
         try:
-            raw_grants = search_grants(
+            raw_grants = _cached_search(
                 keywords    = profile.search_keywords,
                 max_results = max_results,
                 status      = grant_status,
@@ -133,7 +150,7 @@ ai_label = " + AI" if use_ai else ""
 with st.spinner(f"Scoring {len(raw_grants)} opportunities{ai_label}…"):
     matched = score_grants(raw_grants, profile, use_ai=use_ai, min_score=min_score)
 
-# ── Summary metrics ───────────────────────────────────────────────────────────
+#  Summary metrics 
 st.divider()
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Grants Fetched",   f"{len(raw_grants)}")
@@ -141,7 +158,7 @@ col2.metric("Matches Found",    f"{len(matched)}")
 col3.metric("Top Score",        f"{matched[0].relevance_score:.0%}" if matched else "—")
 col4.metric("AI Scored",        "Yes" if use_ai else "No")
 
-# ── Export controls ───────────────────────────────────────────────────────────
+#  Export controls 
 if matched:
     ex1, ex2 = st.columns(2)
     with ex1:
@@ -149,7 +166,7 @@ if matched:
         st.download_button(
             "⬇ Download CSV",
             data=csv_data,
-            file_name=f"grant_matches_{profile.name.replace(' ', '_').lower()}.csv",
+            file_name=f"grant_matches_{re.sub(r'[^\w\-]', '_', profile.name).lower()}.csv",
             mime="text/csv",
             use_container_width=True,
         )
@@ -158,14 +175,15 @@ if matched:
         st.download_button(
             "⬇ Download Report (Markdown)",
             data=md_data.encode("utf-8"),
-            file_name=f"grant_report_{profile.name.replace(' ', '_').lower()}.md",
+            file_name=f"grant_report_{re.sub(r'[^\w\-]', '_', profile.name).lower()}.md",
             mime="text/markdown",
             use_container_width=True,
         )
 
-# ── Results list ──────────────────────────────────────────────────────────────
+#  Results list 
 st.divider()
 st.subheader(f"Top Matches for {profile.name}")
+st.caption("Score thresholds: 65%+ strong match · 35–65% moderate · below 35% low relevance")
 
 for i, grant in enumerate(matched, 1):
     score_pct = f"{grant.relevance_score:.0%}"
@@ -192,9 +210,9 @@ for i, grant in enumerate(matched, 1):
         if grant.eligible_types:
             st.markdown(f"**Eligible Applicants:** {', '.join(grant.eligible_types)}")
 
-        # AI rationale
+        # AI rationale — only show when AI actually scored this grant
         rationale = grant.score_breakdown.get("ai_rationale", "")
-        if rationale and not rationale.startswith("Set ") and not rationale.startswith("AI scoring"):
+        if rationale and grant.score_breakdown.get("ai_score", 0) > 0:
             st.info(f"**AI Analysis:** {rationale}", icon="🤖")
 
         # Score breakdown
@@ -213,7 +231,7 @@ for i, grant in enumerate(matched, 1):
             grants_url = f"https://www.grants.gov/search-results-detail/{grant.id}"
             st.markdown(f"[View on Grants.gov ↗]({grants_url})")
 
-# ── Footer ────────────────────────────────────────────────────────────────────
+#  Footer 
 st.divider()
 st.caption(
     "Built by **Damarius McNair** · "
