@@ -64,11 +64,11 @@ class NonprofitProfile:
     def all_keywords(self) -> set[str]:
         """Full set of lowercase keywords for local scoring."""
         raw = (
-            self.mission + " "
-            + " ".join(self.focus_areas)
-            + " ".join(self.populations)
-            + " ".join(self.programs)
-            + " ".join(self.keywords_extra)
+            self.mission
+            + " " + " ".join(self.focus_areas)
+            + " " + " ".join(self.populations)
+            + " " + " ".join(self.programs)
+            + " " + " ".join(self.keywords_extra)
         )
         return {w.strip(".,;:()").lower() for w in raw.split() if len(w) > 2}
 
