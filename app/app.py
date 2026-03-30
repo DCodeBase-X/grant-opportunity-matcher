@@ -1,6 +1,5 @@
 """
 Grant Opportunity Matcher
-==========================
 Streamlit dashboard that matches nonprofit profiles to live Grants.gov
 opportunities using keyword scoring and optional Claude AI relevance scoring.
 
@@ -26,7 +25,7 @@ from src.exporter   import to_csv_bytes, to_markdown_report
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Grant Opportunity Matcher",
-    page_icon="🎯",
+    page_icon= "app/assets/all_matches.png", 
     layout="wide",
     initial_sidebar_state="expanded",
 )
