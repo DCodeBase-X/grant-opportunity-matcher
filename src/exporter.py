@@ -1,6 +1,6 @@
 """
 exporter.py
-===========
+
 Export matched grant results to CSV or a Markdown report.
 """
 

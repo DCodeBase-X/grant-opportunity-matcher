@@ -1,6 +1,6 @@
 """
 profile.py
-==========
+
 Loads, validates, and processes nonprofit organization profiles
 used as the basis for grant matching.
 """
