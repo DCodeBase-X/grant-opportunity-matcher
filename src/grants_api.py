@@ -7,10 +7,13 @@ No API key required — fully open access.
 Docs: https://www.grants.gov/api-reference
 """
 
+import logging
 import time
 import requests
 from dataclasses import dataclass, field
 from typing import Optional
+
+_log = logging.getLogger(__name__)
 
 SEARCH_URL  = "https://api.grants.gov/v1/api/search2"
 DETAIL_URL  = "https://api.grants.gov/v1/api/fetchOpportunity"
@@ -162,7 +165,14 @@ def fetch_grant_detail(opportunity_id: str) -> Optional[dict]:
         )
         resp.raise_for_status()
         return resp.json().get("data", {})
-    except Exception:
+    except requests.exceptions.Timeout:
+        _log.warning("fetch_grant_detail timed out for opportunity %s", opportunity_id)
+        return None
+    except requests.exceptions.HTTPError as e:
+        _log.warning("fetch_grant_detail HTTP %s for opportunity %s", e.response.status_code if e.response is not None else "error", opportunity_id)
+        return None
+    except Exception as e:
+        _log.warning("fetch_grant_detail unexpected %s for opportunity %s", type(e).__name__, opportunity_id)
         return None
 
 
