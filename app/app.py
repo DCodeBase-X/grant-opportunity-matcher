@@ -7,6 +7,7 @@ Run:
     streamlit run app/app.py
 """
 
+import copy
 import os
 import re
 import sys
@@ -40,9 +41,10 @@ def _cached_search(
     )
 
 #  Page config
+_icon_path = Path(__file__).parent / "assets" / "all_matches.png"
 st.set_page_config(
     page_title="Grant Opportunity Matcher",
-    page_icon= "app/assets/all_matches.png", 
+    page_icon=str(_icon_path) if _icon_path.exists() else None,
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -72,7 +74,7 @@ with st.sidebar:
     else:
         st.subheader("Your Organization")
         profile_data = {
-            "name":           st.text_input("Organization name", "My Nonprofit"),
+            "name":           st.text_input("Organization name", "My Nonprofit", max_chars=100),
             "mission":        st.text_area("Mission statement",
                                 "We provide housing and reentry services for justice-involved adults.", height=80, max_chars=500),
             "focus_areas":    st.text_input("Focus areas (comma-separated)",
@@ -92,10 +94,16 @@ with st.sidebar:
     st.subheader("Search Settings")
     max_results = st.slider("Max results from Grants.gov", 10, 100, 25, step=5)
     grant_status = st.selectbox("Grant status", ["posted", "all", "closed"])
+    _has_ai_key = bool(
+        os.getenv("ANTHROPIC_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+        or os.getenv("GROQ_API_KEY")
+        or os.getenv("OLLAMA_BASE_URL")
+    )
     use_ai       = st.toggle(
-        "AI relevance scoring (Claude)",
-        value=bool(os.getenv("ANTHROPIC_API_KEY")),
-        help="Requires ANTHROPIC_API_KEY in your .env file. Uses claude-haiku for cost efficiency.",
+        "AI relevance scoring",
+        value=_has_ai_key,
+        help="Requires an AI provider key: ANTHROPIC_API_KEY, OPENAI_API_KEY, GROQ_API_KEY, or OLLAMA_BASE_URL.",
     )
     use_mock     = st.toggle("Use demo data (no live API call)", value=False,
                              help="Uses built-in sample grants instead of calling Grants.gov. Great for demos.")
@@ -128,7 +136,7 @@ except ValueError as e:
 
 with st.spinner("Searching Grants.gov…" if not use_mock else "Loading demo grants…"):
     if use_mock:
-        raw_grants = MOCK_GRANTS
+        raw_grants = copy.deepcopy(MOCK_GRANTS)
     else:
         try:
             raw_grants = _cached_search(

@@ -38,6 +38,7 @@ Security notes
 
 import html
 import ipaddress
+import logging
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -46,6 +47,8 @@ from urllib.parse import urlparse
 
 from .grants_api import GrantOpportunity
 from .profile import NonprofitProfile, profile_summary
+
+_log = logging.getLogger(__name__)
 
 
 
@@ -64,7 +67,7 @@ _STOPWORDS = {
 _PRIORITY_TERMS = {
     "reentry", "re-entry", "incarceration", "justice", "housing",
     "transitional", "workforce", "vocational", "youth", "nonprofit",
-    "hipaa", "mental health", "substance", "veteran", "homeless",
+    "hipaa", "mental", "health", "substance", "veteran", "homeless",
     "community", "501c3", "faith", "family", "training", "services",
 }
 
@@ -333,7 +336,7 @@ def _score_openai(
 _PROVIDERS: dict[str, tuple[Callable, str, str]] = {
     "anthropic": (_score_anthropic, "anthropic", "claude-haiku-4-5-20251001"),
     "openai":    (_score_openai,    "openai",    "gpt-4o-mini-2024-07-18"),
-    "groq":      (_score_openai,    "openai",    "llama3-8b-8192"),
+    "groq":      (_score_openai,    "openai",    "llama-3.1-8b-instant"),
     "ollama":    (_score_openai,    "openai",    "llama3.2"),
 }
 
@@ -427,13 +430,16 @@ def ai_score(
     try:
         return scorer_fn(prompt, api_key, model, safe_url)
     except ImportError:
-        return 0.0, f"Install '{package}' package to use the {provider} provider."
+        msg = f"Install '{package}' package to use the {provider} provider."
+        _log.warning("AI scoring skipped: %s", msg)
+        return 0.0, msg
     except ValueError as exc:
-        # Safe parse errors — no key material
+        _log.warning("AI response parse error (%s): %s", provider, exc)
         return 0.0, f"AI response parsing error: {exc}"
     except Exception as exc:
-        # Sanitize before returning — HTTP exceptions can embed API keys
-        return 0.0, f"AI scoring error ({provider}): {_sanitize_error(exc)}"
+        sanitized = _sanitize_error(exc)
+        _log.warning("AI scoring error (%s): %s", provider, sanitized)
+        return 0.0, f"AI scoring error ({provider}): {sanitized}"
 
 
 # [ 7  MAIN MATCHING PIPELINE ]
