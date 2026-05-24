@@ -22,6 +22,7 @@ desktop.ini
 outputs/
 __pycache__/
 *.pyc
+.pytest_cache/
 .streamlit/secrets.toml
 
 # LOGS & DEBUG  
@@ -33,6 +34,7 @@ yarn-error.log*
 # DEPENDENCY FOLDERS
 node_modules/
 .npm
+.venv/
 
 # ENV & SECRETS
 .env
