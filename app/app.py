@@ -8,6 +8,7 @@ Run:
 """
 
 import copy
+import html
 import os
 import re
 import sys
@@ -89,6 +90,10 @@ with st.sidebar:
             "funding_min":    st.number_input("Min award sought ($)", 0, 5_000_000, 50_000, step=10_000),
             "funding_max":    st.number_input("Max award sought ($)", 0, 10_000_000, 500_000, step=10_000),
         }
+        _state = profile_data["location_state"]
+        if _state and (len(_state) != 2 or not _state.isalpha()):
+            st.error("State must be a 2-letter code (e.g., NC)")
+            st.stop()
 
     st.divider()
     st.subheader("Search Settings")
@@ -211,12 +216,12 @@ for i, grant in enumerate(matched, 1):
         c3.metric("Deadline",      grant.deadline_display)
         c4.metric("Relevance",     score_pct)
 
-        st.markdown(f"**Grant #:** `{grant.number}`   |   **Agency:** {grant.agency}")
+        st.markdown(f"**Grant #:** `{html.escape(grant.number)}`   |   **Agency:** {html.escape(grant.agency)}")
 
         if grant.categories:
-            st.markdown(f"**Categories:** {', '.join(grant.categories)}")
+            st.markdown(f"**Categories:** {html.escape(', '.join(grant.categories))}")
         if grant.eligible_types:
-            st.markdown(f"**Eligible Applicants:** {', '.join(grant.eligible_types)}")
+            st.markdown(f"**Eligible Applicants:** {html.escape(', '.join(grant.eligible_types))}")
 
         # AI rationale — only show when AI actually scored this grant
         rationale = grant.score_breakdown.get("ai_rationale", "")
@@ -233,9 +238,9 @@ for i, grant in enumerate(matched, 1):
             })
 
         st.markdown("**Description:**")
-        st.markdown(grant.description[:800] + ("…" if len(grant.description) > 800 else ""))
+        st.write(grant.description[:800] + ("…" if len(grant.description) > 800 else ""))
 
-        if grant.id and not grant.id.startswith("MOCK"):
+        if grant.id and not grant.id.startswith("MOCK") and re.match(r'^[\w\-]+$', grant.id):
             grants_url = f"https://www.grants.gov/search-results-detail/{grant.id}"
             st.markdown(f"[View on Grants.gov ↗]({grants_url})")
 
