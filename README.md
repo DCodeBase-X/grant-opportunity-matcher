@@ -74,4 +74,13 @@ pytest tests/
 
 ## Built by
 
-**Damarius McNair** · [Portfolio](https://dcodebase-x.github.io) · [GitHub](https://github.com/DCodeBase-X) · [LinkedIn](https://linkedin.com/in/damariusmcnair)
+**Damarius McNair** · [Portfolio](https://damariusmcnair.com) · [GitHub](https://github.com/DCodeBase-X) · [LinkedIn](https://linkedin.com/in/damariusmcnair)
+
+## License
+
+This project is licensed under [AGPL-3.0](LICENSE). You are free to use,
+modify, and distribute it under those terms.
+
+For commercial use that cannot comply with AGPL-3.0 (e.g., proprietary
+products or hosted services without source disclosure), a commercial
+license is available — contact [ds.mcnair@outlook.com](mailto:ds.mcnair@outlook.com).
