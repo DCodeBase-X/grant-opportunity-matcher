@@ -1,5 +1,7 @@
 # Grant Opportunity Matcher
 
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+
 A Streamlit dashboard that matches nonprofit organization profiles to live federal grant opportunities from [Grants.gov](https://www.grants.gov), scored by keyword alignment and optional AI relevance scoring.
 
 ## Features
