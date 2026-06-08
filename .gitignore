@@ -49,3 +49,6 @@ node_modules/
 *.zip
 *.tar.gz
 .cache/
+
+# PLANNING & INTERNAL DOCS
+docs/superpowers/
