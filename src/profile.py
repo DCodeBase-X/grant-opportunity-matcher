@@ -5,10 +5,49 @@ Loads, validates, and processes nonprofit organization profiles
 used as the basis for grant matching.
 """
 
+from __future__ import annotations
+
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+# Maximum character lengths for profile text fields (defense-in-depth)
+_MAX_FIELD_LENGTHS: dict[str, int] = {
+    "name":           150,
+    "mission":        600,
+    "focus_areas":    300,   # per-item limit applied via _as_list
+    "populations":    300,
+    "programs":       300,
+    "keywords_extra": 300,
+    "location_state": 2,
+    "location_city":  100,
+}
+
+# Reject values that look like prompt injection targeting the AI scoring stage
+_INJECTION_RE = re.compile(
+    r"^\s*(SCORE\s*:|RATIONALE\s*:|SYSTEM\s*:|<\s*system|IGNORE\s|"
+    r"assistant\s*:|forget\s+previous|disregard\s+previous|new\s+instruction)",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _validate_text(value: str, field_name: str, max_len: int) -> str:
+    """Strip injection attempts and enforce length for a single text field."""
+    if not isinstance(value, str):
+        value = str(value)
+    if _INJECTION_RE.search(value):
+        raise ValueError(
+            f"Profile field '{field_name}' contains disallowed content."
+        )
+    value = value.strip()
+    if len(value) > max_len:
+        raise ValueError(
+            f"Profile field '{field_name}' exceeds {max_len} characters "
+            f"(got {len(value)})."
+        )
+    return value
 
 
 @dataclass
@@ -90,13 +129,24 @@ def _dict_to_profile(data: dict) -> NonprofitProfile:
     if missing:
         raise ValueError(f"Profile missing required fields: {missing}")
 
+    name    = _validate_text(data["name"],    "name",    _MAX_FIELD_LENGTHS["name"])
+    mission = _validate_text(data["mission"], "mission", _MAX_FIELD_LENGTHS["mission"])
+
+    state_raw = str(data["location_state"]).upper().strip()
+    if not (len(state_raw) == 2 and state_raw.isalpha()):
+        raise ValueError("location_state must be a two-letter state code (e.g. 'NC').")
+
+    city_raw = data.get("location_city") or None
+    if city_raw:
+        city_raw = _validate_text(str(city_raw), "location_city", _MAX_FIELD_LENGTHS["location_city"])
+
     return NonprofitProfile(
-        name            = data["name"],
-        mission         = data["mission"],
+        name            = name,
+        mission         = mission,
         focus_areas     = _as_list(data["focus_areas"]),
         populations     = _as_list(data["populations"]),
-        location_state  = data["location_state"].upper(),
-        location_city   = data.get("location_city"),
+        location_state  = state_raw,
+        location_city   = city_raw,
         org_type        = data.get("org_type", "Nonprofit"),
         tax_status      = data.get("tax_status", "501(c)(3)"),
         annual_budget   = data.get("annual_budget"),

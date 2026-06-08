@@ -36,6 +36,9 @@ Security notes
 - AI_PROVIDER env value is validated against a strict whitelist before use.
 """
 
+from __future__ import annotations
+
+import copy
 import html
 import ipaddress
 import logging
@@ -484,9 +487,11 @@ def score_grants(
             combined = kw_score
 
         breakdown["combined_score"] = combined
-        grant.relevance_score = combined
-        grant.score_breakdown  = breakdown
-        return grant
+        # Shallow copy so we don't mutate the caller's list (important for MOCK_GRANTS)
+        scored = copy.copy(grant)
+        scored.relevance_score = combined
+        scored.score_breakdown  = breakdown
+        return scored
 
     # Parallelize AI scoring (each call is a separate network request)
     if use_ai and len(grants) > 1:
