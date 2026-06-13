@@ -15,10 +15,19 @@ import sys
 import json
 from pathlib import Path
 
+# Load .env before any os.getenv() calls so local dev keys are available
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent.parent / ".env", override=False)
+except ImportError:
+    pass  # python-dotenv is optional; env vars must be set another way
+
 import streamlit as st
 
-# Allow imports from project root
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Allow imports from project root when not installed as a package
+_root = Path(__file__).parent.parent
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
 
 from src.grants_api import search_grants, MOCK_GRANTS, GrantOpportunity
 from src.profile    import NonprofitProfile, profile_from_dict, load_profile
@@ -248,7 +257,7 @@ for i, grant in enumerate(matched, 1):
 st.divider()
 st.caption(
     "Built by **Damarius McNair** · "
-    "[Portfolio](https://dcodebase-x.github.io) · "
+    "[Portfolio](https://damariusmcnair.com) · "
     "[GitHub](https://github.com/DCodeBase-X) · "
     "[LinkedIn](https://linkedin.com/in/damariusmcnair)"
 )

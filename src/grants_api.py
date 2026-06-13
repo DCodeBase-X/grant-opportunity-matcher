@@ -8,6 +8,7 @@ Docs: https://www.grants.gov/api-reference
 """
 
 import logging
+import threading
 import time
 import requests
 from dataclasses import dataclass, field
@@ -19,6 +20,11 @@ SEARCH_URL  = "https://api.grants.gov/v1/api/search2"
 DETAIL_URL  = "https://api.grants.gov/v1/api/fetchOpportunity"
 TIMEOUT     = 15   # seconds
 MAX_RETRIES = 3
+
+# Simple token-bucket rate limiter: at most 5 requests per 10 seconds
+_RATE_LOCK        = threading.Lock()
+_RATE_LAST_CALL   = 0.0
+_RATE_MIN_INTERVAL = 2.0  # seconds between consecutive API calls
 
 
 @dataclass
@@ -120,6 +126,14 @@ def search_grants(
     if funding_max is not None:
         payload["awardCeiling"] = funding_max
 
+    # Enforce minimum interval between API calls
+    global _RATE_LAST_CALL
+    with _RATE_LOCK:
+        elapsed = time.monotonic() - _RATE_LAST_CALL
+        if elapsed < _RATE_MIN_INTERVAL:
+            time.sleep(_RATE_MIN_INTERVAL - elapsed)
+        _RATE_LAST_CALL = time.monotonic()
+
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             resp = requests.post(SEARCH_URL, json=payload, timeout=TIMEOUT)
@@ -177,12 +191,18 @@ def fetch_grant_detail(opportunity_id: str) -> Optional[dict]:
 
 
 # ── Mock data for offline / testing use ──────────────────────────────────────
+# Dates are computed at import time so demo data stays "active" regardless of year.
+def _mock_date(offset_days: int) -> str:
+    from datetime import date, timedelta
+    return (date.today() + timedelta(days=offset_days)).strftime("%Y-%m-%d")
+
+
 MOCK_GRANTS = [
     GrantOpportunity(
         id="MOCK-001", number="HUD-2024-001",
         title="Reentry Housing Assistance Program",
         agency="Dept. of Housing and Urban Development", agency_code="HUD",
-        status="posted", open_date="2024-01-15", close_date="2024-09-30",
+        status="posted", open_date=_mock_date(-30), close_date=_mock_date(120),
         award_ceiling=500_000, award_floor=50_000, expected_awards=10,
         categories=["Housing", "Recovery Act"],
         eligible_types=["Nonprofits", "Faith-Based Organizations"],
@@ -196,7 +216,7 @@ MOCK_GRANTS = [
         id="MOCK-002", number="DOJ-BJA-2024-012",
         title="Second Chance Act Reentry Program",
         agency="Dept. of Justice — Bureau of Justice Assistance", agency_code="DOJ",
-        status="posted", open_date="2024-02-01", close_date="2024-10-15",
+        status="posted", open_date=_mock_date(-15), close_date=_mock_date(90),
         award_ceiling=1_000_000, award_floor=200_000, expected_awards=5,
         categories=["Law, Justice and Legal Services"],
         eligible_types=["Nonprofits", "State Governments", "Local Governments"],
@@ -210,7 +230,7 @@ MOCK_GRANTS = [
         id="MOCK-003", number="SAMHSA-2024-007",
         title="Community Mental Health and Substance Use Treatment",
         agency="SAMHSA", agency_code="HHS",
-        status="posted", open_date="2024-03-01", close_date="2024-11-01",
+        status="posted", open_date=_mock_date(-7), close_date=_mock_date(150),
         award_ceiling=750_000, award_floor=100_000, expected_awards=8,
         categories=["Health", "Recovery and Reinvestment"],
         eligible_types=["Nonprofits", "Faith-Based Organizations", "Tribal Governments"],
@@ -224,7 +244,7 @@ MOCK_GRANTS = [
         id="MOCK-004", number="DOL-ETA-2024-003",
         title="Workforce Innovation and Opportunity Act — Adult Program",
         agency="Dept. of Labor — Employment and Training Administration", agency_code="DOL",
-        status="posted", open_date="2024-01-20", close_date="2024-08-31",
+        status="posted", open_date=_mock_date(-45), close_date=_mock_date(60),
         award_ceiling=2_000_000, award_floor=250_000, expected_awards=4,
         categories=["Employment, Labor and Training"],
         eligible_types=["Nonprofits", "State Agencies", "Local Governments"],
@@ -239,7 +259,7 @@ MOCK_GRANTS = [
         id="MOCK-005", number="ACF-2024-YOUTH-01",
         title="Youth Services and Family Strengthening Grant",
         agency="Administration for Children and Families", agency_code="HHS",
-        status="posted", open_date="2024-02-15", close_date="2024-12-31",
+        status="posted", open_date=_mock_date(-20), close_date=_mock_date(180),
         award_ceiling=400_000, award_floor=75_000, expected_awards=12,
         categories=["Children and Families"],
         eligible_types=["Nonprofits", "Faith-Based Organizations"],

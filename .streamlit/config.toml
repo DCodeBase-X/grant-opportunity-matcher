@@ -1,0 +1,17 @@
+[server]
+# Production: bind to all interfaces; override with STREAMLIT_SERVER_PORT env var
+port = 8501
+headless = true
+enableCORS = false
+enableXsrfProtection = true
+maxUploadSize = 5            # MB — no file uploads used, keep tight
+maxMessageSize = 10          # MB
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"
+
+[logger]
+level = "warning"            # reduce noise in production; set "info" for debugging
